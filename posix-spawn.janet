@@ -5,7 +5,7 @@
 (def POSIX_SPAWN_RESETIDS _posix-spawn/POSIX_SPAWN_RESETIDS)
 
 # kill -l
-# It seems these numbers are standard enough, we 
+# It seems these numbers are standard enough, we
 # define them instead of C so tree shaking can remove them in envs.
 (def SIGHUP 1)
 (def SIGINT 2)
@@ -57,7 +57,7 @@ Signal to send process on when close is called. Also
 called when process is garbage collected.
 
 :file-actions
-  
+
 A tuple of file actions the child will take before calling execve.
 
 Valid file action formats:
@@ -78,7 +78,7 @@ Defaults to POSIX_SPAWN_SETSIGMASK|POSIX_SPAWN_SETSIGDEF.
 
 A set of signals values to reset to their default handlers.
 As a special case, :all may be passed. nil
-means no signals. Defaults to :all. 
+means no signals. Defaults to :all.
 
 :sig-mask
 
@@ -108,12 +108,12 @@ nil means no signals. Defaults to nil.
   [p sig]
   (_posix-spawn/signal p sig))
 
-(defn close 
+(defn close
   "Send the process it's close signal and wait for it to exit."
   [p]
   (_posix-spawn/close p))
 
 (defn pipe
-  "Create a pair of files created with pipe. The files have the CLOEXEC flag set."
-  []
-  (_posix-spawn/pipe))
+  "Returns a tuple of [read write] files or streams created with pipe. The file descriptors have the CLOEXEC flag set.\n\nmode can be :read-stream, :write-stream, or :streams, which determines whether the each end of the pipe is created as a file or stream."
+  [&opt mode]
+  (_posix-spawn/pipe mode))
