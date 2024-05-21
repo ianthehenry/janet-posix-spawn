@@ -117,3 +117,13 @@ nil means no signals. Defaults to nil.
   "Returns a tuple of [read write] files or streams created with pipe. The file descriptors have the CLOEXEC flag set.\n\nmode can be :read-stream, :write-stream, or :streams, which determines whether the each end of the pipe is created as a file or stream."
   [&opt mode]
   (_posix-spawn/pipe mode))
+
+(defn fd
+  "Returns the file descriptor for a file or stream or file pointer."
+  [file-like]
+  (_posix-spawn/fd file-like))
+
+(defn close-fd
+  "Close a file descriptor."
+  [file-like]
+  (_posix-spawn/close-fd file-like))

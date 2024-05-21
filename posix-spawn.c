@@ -184,6 +184,9 @@ static int get_fileno(Janet value) {
     if (janet_checkfile(value)) {
         return fileno(janet_unwrapfile(value, NULL));
     }
+    if (janet_checktype(value, JANET_POINTER)) {
+        return fileno((FILE *)janet_unwrap_pointer(value));
+    }
     if (checkstream(value)) {
         JanetStream *stream = janet_unwrap_abstract(value);
         return stream->handle;
@@ -288,15 +291,15 @@ static Janet primitive_pspawn(int32_t argc, Janet *argv) {
                 if (r.len != 3)
                     PSPAWN_ERROR("dup2 file actions have 2 files elements");
 
-                if (!janet_checkfile(r.items[1]))
+                int source_fd = get_fileno(r.items[1]);
+                if (source_fd < 0)
                     PSPAWN_ERRORF(":dup2 source must be a file, got %v", r.items[1]);
 
-                if (!janet_checkfile(r.items[2]) && !janet_checkint(r.items[2]))
+                int dest_fd = get_fileno(r.items[2]);
+                if (dest_fd < 0)
                     PSPAWN_ERRORF(":dup2 dest must be a file or int, got %v", r.items[2]);
 
-                // printf("dup2 %d -> %d\n", get_fileno(r.items[1]), get_fileno(r.items[2]));
-
-                if (posix_spawn_file_actions_adddup2(pfile_actions, get_fileno(r.items[1]), get_fileno(r.items[2])) != 0)
+                if (posix_spawn_file_actions_adddup2(pfile_actions, source_fd, dest_fd) != 0)
                     PSPAWN_ERROR(":dup2 file action unable to determine fileno");
 
             } else if (janet_keyeq(r.items[0], "close")) {
@@ -304,10 +307,11 @@ static Janet primitive_pspawn(int32_t argc, Janet *argv) {
                 if (r.len != 2)
                     PSPAWN_ERROR(":close file actions have 1 file");
 
-                if (!janet_checkfile(r.items[1]) && !janet_checkint(r.items[1]) && !checkstream(r.items[1]))
+                int fd = get_fileno(r.items[1]);
+                if (fd < 0)
                     PSPAWN_ERRORF(":close value must be a file or int, got %v", r.items[1]);
 
-                if (posix_spawn_file_actions_addclose(pfile_actions, get_fileno(r.items[1])) != 0)
+                if (posix_spawn_file_actions_addclose(pfile_actions, fd) != 0)
                     PSPAWN_ERROR(":close file action unable to determine fileno");
 
             } else {
@@ -493,7 +497,6 @@ static Janet pspawn_close(int32_t argc, Janet *argv) {
 // this probably shouldn't do any argument parsing -- we can do that in the janet wrapper.
 // just take a bitset.
 static Janet pspawn_pipe(int32_t argc, Janet *argv) {
-    (void)argv;
     janet_fixarity(argc, 1);
 
     int read_stream = 0;
@@ -513,19 +516,23 @@ static Janet pspawn_pipe(int32_t argc, Janet *argv) {
 
     int fds[2];
 
-    if (pipe(fds) < 0)
+    if (pipe(fds) < 0) {
         janet_panicf("unable to allocate pipe - %s", strerror(errno));
-
-    // FD_CLOEXEC or O_CLOEXEC?
-    if (fcntl(fds[0], F_SETFD, O_CLOEXEC) < 0) {
-        close(fds[0]);
-        close(fds[1]);
-        janet_panicf("unable to set pipe FD_CLOEXEC - %s", strerror(errno));
     }
-    if (fcntl(fds[1], F_SETFD, O_CLOEXEC) < 0) {
-        close(fds[0]);
-        close(fds[1]);
-        janet_panicf("unable to set pipe FD_CLOEXEC - %s", strerror(errno));
+
+    if (read_stream) {
+        if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) < 0) {
+            close(fds[0]);
+            close(fds[1]);
+            janet_panicf("unable to set pipe FD_CLOEXEC - %s", strerror(errno));
+        }
+    }
+    if (write_stream) {
+        if (fcntl(fds[1], F_SETFD, FD_CLOEXEC) < 0) {
+            close(fds[0]);
+            close(fds[1]);
+            janet_panicf("unable to set pipe FD_CLOEXEC - %s", strerror(errno));
+        }
     }
 
     if (read_stream) {
@@ -554,7 +561,8 @@ static Janet pspawn_pipe(int32_t argc, Janet *argv) {
             close(fds[1]);
             janet_panicf("unable to create file object - %s", strerror(errno));
         }
-        t[0] = janet_makefile(file, JANET_FILE_READ | JANET_FILE_BINARY);
+        t[0] = janet_wrap_pointer(file);
+        //t[0] = janet_makefile(file, JANET_FILE_READ | JANET_FILE_BINARY | JANET_FILE_NOT_CLOSEABLE);
     }
 
     if (write_stream) {
@@ -566,10 +574,34 @@ static Janet pspawn_pipe(int32_t argc, Janet *argv) {
             close(fds[1]);
             janet_panicf("unable to create file object - %s", strerror(errno));
         }
-        t[1] = janet_makefile(file, JANET_FILE_WRITE | JANET_FILE_BINARY);
+        t[1] = janet_wrap_pointer(file);
+        //t[1] = janet_makefile(file, JANET_FILE_WRITE | JANET_FILE_BINARY | JANET_FILE_NOT_CLOSEABLE);
     }
 
     return janet_wrap_tuple(janet_tuple_end(t));
+}
+
+static Janet pspawn_fd(int32_t argc, Janet *argv) {
+    janet_fixarity(argc, 1);
+    Janet target = argv[0];
+    int fd = get_fileno(target);
+    if (fd < 0) {
+        janet_panicf("could not identify file descriptor %q", target);
+    }
+    return janet_wrap_integer(fd);
+}
+
+static Janet pspawn_close_fd(int32_t argc, Janet *argv) {
+    janet_fixarity(argc, 1);
+    Janet target = argv[0];
+    int fd = get_fileno(target);
+    if (fd < 0) {
+        janet_panicf("could not identify file descriptor %q", target);
+    }
+    if (close(fd) < 0) {
+        janet_panicf("could not close file descriptor %d", fd);
+    }
+    return janet_wrap_nil();
 }
 
 static const JanetReg cfuns[] = {
@@ -578,6 +610,8 @@ static const JanetReg cfuns[] = {
     {"close", pspawn_close, "(posix-spawn/close p)\n\n"},
     {"wait", pspawn_wait, "(posix-spawn/wait p)\n\n"},
     {"pipe", pspawn_pipe, "(posix-spawn/pipe &opt mode)\n\n"},
+    {"fd", pspawn_fd, "(posix-spawn/fd file-like)\n\n"},
+    {"close-fd", pspawn_close_fd, "(posix-spawn/close-fd file-like)\n\n"},
     {NULL, NULL, NULL}
 };
 
